@@ -503,14 +503,19 @@ export default class GroupAdmin {
     for (const groupId of groupIds) {
       try {
         await this.kickMember(groupId, userId, executor, block)
+        // 从群列表缓存获取群名
+        const groupInfo = this.Bot.gl.get(Number(groupId)) || {}
         const group = this.Bot.pickGroup(groupId, true)
         results.success.push({
           group_id: groupId,
-          group_name: group.name || groupId
+          group_name: groupInfo.group_name || group.name || groupId
         })
       } catch (err) {
+        // 失败时也尝试显示群名
+        const groupInfo = this.Bot.gl.get(Number(groupId)) || {}
         results.failed.push({
           group_id: groupId,
+          group_name: groupInfo.group_name || groupId,
           error: err.message || String(err)
         })
       }

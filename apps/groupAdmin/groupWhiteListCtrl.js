@@ -36,7 +36,9 @@ export class GroupWhiteListCtrl extends plugin {
    * @param model
    */
   async addList(e, custom, operation, model) {
-    if (!common.checkPermission(e, "admin", "admin")) return
+    // 主人无需 Bot 有管理权限，其他管理员需要
+    const isMaster = Config.masterQQ?.includes(e.user_id)
+    if (!isMaster && !common.checkPermission(e, "admin", "admin")) return
 
     operation ||= /加/.test(e.msg) ? "add" : "del"
     model ||= /黑/.test(e.msg) ? "blackQQ" : "whiteQQ"
@@ -72,7 +74,7 @@ export class GroupWhiteListCtrl extends plugin {
   }
 }
 
-Bot.on("notice.group.ban", async(e) => {
+Bot.on("notice.group.ban", async (e) => {
   const bot = e.bot ?? Bot
   /** 处理白名单禁言 */
   const { groupAdmin } = Config
@@ -81,17 +83,17 @@ Bot.on("notice.group.ban", async(e) => {
 
   if (
     isWhiteUser &&
-        !isMaster &&
-        groupAdmin.noBan &&
-        (e.group.is_admin || e.group.is_owner) &&
-        e.duration !== 0
+    !isMaster &&
+    groupAdmin.noBan &&
+    (e.group.is_admin || e.group.is_owner) &&
+    e.duration !== 0
   ) {
     await e.group.muteMember(e.user_id, 0)
     e.reply("已解除白名单用户的禁言")
   }
 })
 
-Bot.on("request.group.add", async(e) => {
+Bot.on("request.group.add", async (e) => {
   if (!common.checkPermission(e, "all", "admin", { isReply: false })) return
   if (Config.groupAdmin.blackQQ.includes(e.user_id)) {
     e.approve(false)
@@ -99,7 +101,7 @@ Bot.on("request.group.add", async(e) => {
   }
 })
 
-Bot.on("notice.group.increase", async(e) => {
+Bot.on("notice.group.increase", async (e) => {
   if (!common.checkPermission(e, "all", "admin", { isReply: false })) return
   if (Config.groupAdmin.blackQQ.includes(e.user_id)) {
     logger.info(`${Log_Prefix} 检测到黑名单${e.user_id}加入${e.group_id}，已踢出`)

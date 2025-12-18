@@ -325,7 +325,7 @@ export class GroupAdmin extends plugin {
           results.push(`✅ 已从以下群踢出：\n${multiRes.success.map(g => `  • ${g.group_name} (${g.group_id})`).join("\n")}`)
         }
         if (multiRes.failed.length > 0) {
-          results.push(`❎ 以下群踢出失败：\n${multiRes.failed.map(g => `  • ${g.group_id}: ${g.error}`).join("\n")}`)
+          results.push(`❎ 以下群踢出失败：\n${multiRes.failed.map(g => `  • ${g.group_name} (${g.group_id}): ${g.error}`).join("\n")}`)
         }
       }
 
