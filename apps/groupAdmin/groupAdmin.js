@@ -145,22 +145,29 @@ export class GroupAdmin extends plugin {
   }
 
   async kickMember(e) {
-    if (!common.checkPermission(e, "admin", "admin")) return true
+    // 检查是否为主人或白名单用户（提前检查，用于决定是否走多群流程）
+    const isMaster = Config.masterQQ?.includes(e.user_id)
+    const isWhiteUser = Config.groupAdmin.whiteQQ?.includes(Number(e.user_id) || String(e.user_id))
+    const canMultiKick = isMaster || isWhiteUser
+
+    // 非主人/白名单：使用原有权限检查
+    if (!canMultiKick) {
+      if (!common.checkPermission(e, "admin", "admin")) return true
+    }
+
     let qq = e.message.filter(item => item.type == "at").map(item => item.qq)
     if (qq.length < 2) qq = qq[0] || e.msg.replace(/#|踢黑?/g, "").trim()
     const isBlack = /黑/.test(e.msg)
-    const isMaster = Config.masterQQ?.includes(e.user_id)
 
     // 检查 QQ 号是否有效
     if (!qq || !(/^\d{5,}$/.test(qq))) {
       return e.reply("❎ 请输入正确的QQ号或@要踢的人")
     }
 
-    try {
-      // 检查是否为主人或白名单用户
-      const isWhiteUser = Config.groupAdmin.whiteQQ?.includes(Number(e.user_id) || String(e.user_id))
-      const canMultiKick = isMaster || isWhiteUser
+    // 检查当前群 Bot 是否有权限
+    const currentGroupHasPermission = e.group.is_admin || e.group.is_owner
 
+    try {
       // 非主人/白名单：直接踢本群，和以前逻辑一致
       if (!canMultiKick) {
         const res = await new Ga(e).kickMember(e.group_id, qq, e.user_id, isBlack)
@@ -188,7 +195,8 @@ export class GroupAdmin extends plugin {
           isBlack,
           otherGroups,
           currentGroupId: e.group_id,
-          canMultiKick
+          canMultiKick,
+          currentGroupHasPermission // 保存当前群权限状态
         }
         this.setContext("_kickMemberContext")
 
@@ -199,7 +207,7 @@ export class GroupAdmin extends plugin {
           "\n📌 回复选项：",
           "\n• 序号如「1」或「123」选择群",
           "\n• 「全部」从所有群踢出",
-          "\n• 「仅本群」只踢本群",
+          currentGroupHasPermission ? "\n• 「仅本群」只踢本群" : "\n• 本群无权限，选择其他群操作",
           "\n• 「取消」取消操作"
         ]
 
@@ -207,7 +215,12 @@ export class GroupAdmin extends plugin {
         return
       }
 
-      // 用户只在当前群，直接执行踢出
+      // 用户只在当前群
+      if (!currentGroupHasPermission) {
+        return e.reply("❎ Bot权限不足，需要管理员权限")
+      }
+
+      // 直接执行踢出
       const res = await new Ga(e).kickMember(e.group_id, qq, e.user_id, isBlack)
       e.reply(res)
       if (isBlack) {
@@ -220,7 +233,7 @@ export class GroupAdmin extends plugin {
 
   async _kickMemberContext(_e) {
     const e = this.e
-    const { qq, isBlack, otherGroups, currentGroupId, canMultiKick } = _e._kickData
+    const { qq, isBlack, otherGroups, currentGroupId, canMultiKick, currentGroupHasPermission } = _e._kickData
     const msg = e.msg.trim()
 
     // 取消操作
@@ -234,11 +247,14 @@ export class GroupAdmin extends plugin {
 
     // 仅本群
     if (/^(仅?本群)$/i.test(msg)) {
+      if (!currentGroupHasPermission) {
+        return e.reply("❎ 本群无权限，请选择其他群")
+      }
       kickCurrentGroup = true
     }
     // 全部
     else if (/^(全部|all)$/i.test(msg)) {
-      kickCurrentGroup = true
+      kickCurrentGroup = currentGroupHasPermission // 只有有权限才踢本群
       selectedGroups = otherGroups.filter(g => g.is_admin || g.is_owner)
 
       // 多群踢黑只允许主人或白名单
@@ -272,7 +288,8 @@ export class GroupAdmin extends plugin {
         return e.reply("❎ 多群踢黑仅主人或白名单可操作，已取消")
       }
 
-      kickCurrentGroup = true // 默认也踢本群
+      // 选择其他群时，如果本群有权限也一起踢
+      kickCurrentGroup = currentGroupHasPermission
     } else {
       return e.reply("❎ 无效输入，请输入序号、「全部」、「仅本群」或「取消」")
     }
@@ -282,7 +299,7 @@ export class GroupAdmin extends plugin {
     try {
       const results = []
 
-      // 踢出当前群
+      // 踢出当前群（仅当有权限时）
       if (kickCurrentGroup) {
         try {
           const res = await new Ga(e).kickMember(currentGroupId, qq, e.user_id, isBlack)

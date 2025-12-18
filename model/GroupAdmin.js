@@ -446,7 +446,7 @@ export default class GroupAdmin {
   }
 
   /**
-   * 查找用户存在于哪些群中
+   * 查找用户存在于哪些群中（使用缓存查询，高性能）
    * @param {number|string} userId - 用户 QQ 号
    * @param {number|string} [excludeGroupId] - 排除的群号（通常是当前群）
    * @returns {Promise<Array>} - 包含群信息的数组
@@ -454,31 +454,36 @@ export default class GroupAdmin {
   async findUserInAllGroups(userId, excludeGroupId = null) {
     const result = []
     const groupList = Array.from(this.Bot.gl.values())
+    const targetUserId = Number(userId) || userId
 
-    for (const group of groupList) {
-      // 排除指定群
-      if (excludeGroupId && group.group_id == excludeGroupId) continue
+    // 并行获取所有群的成员列表（使用缓存）
+    const checkPromises = groupList
+      .filter(group => !excludeGroupId || group.group_id != excludeGroupId)
+      .map(async group => {
+        try {
+          const g = this.Bot.pickGroup(group.group_id, true)
+          // 使用 getMemberMap 获取缓存的群成员列表，不发起网络请求
+          const memberMap = await g.getMemberMap?.() || g.member_map || new Map()
+          const memberInfo = memberMap.get(targetUserId)
 
-      try {
-        const g = this.Bot.pickGroup(group.group_id, true)
-        const member = g.pickMember(Number(userId) || userId)
-        const memberInfo = member?.info || await member?.getInfo?.()
-
-        if (memberInfo) {
-          result.push({
-            group_id: group.group_id,
-            group_name: group.group_name,
-            member_card: memberInfo.card || memberInfo.nickname,
-            member_role: memberInfo.role,
-            is_admin: g.is_admin,
-            is_owner: g.is_owner
-          })
+          if (memberInfo) {
+            return {
+              group_id: group.group_id,
+              group_name: group.group_name,
+              member_card: memberInfo.card || memberInfo.nickname,
+              member_role: memberInfo.role,
+              is_admin: g.is_admin,
+              is_owner: g.is_owner
+            }
+          }
+        } catch (e) {
+          // 忽略获取失败的群
         }
-      } catch (e) {
-        // 忽略获取失败的群
-      }
-    }
-    return result
+        return null
+      })
+
+    const results = await Promise.all(checkPromises)
+    return results.filter(r => r !== null)
   }
 
   /**
