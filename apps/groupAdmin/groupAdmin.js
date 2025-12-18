@@ -368,8 +368,8 @@ export class GroupAdmin extends plugin {
         return
       }
 
-      // QQ API 失败或无数据，使用缓存方式查询
-      const allGroups = await new Ga(e).findUserInAllGroups(qq)
+      // QQ API 失败或无数据，使用缓存方式查询（排除当前群避免重复）
+      const allGroups = await new Ga(e).findUserInAllGroups(qq, e.group_id)
 
       // 检查当前群（使用缓存）
       const currentGroup = this.Bot.pickGroup(e.group_id, true)
