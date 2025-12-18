@@ -193,7 +193,7 @@ export default class GroupAdmin {
    */
   async BatchKickMember(groupId, arr) {
     let res = await new QQApi(this.e).deleteGroupMember(groupId, arr)
-    let msg = [ "以下为每次清理的结果" ]
+    let msg = ["以下为每次清理的结果"]
     for (let i of res) {
       if (i.ec != 0) {
         msg.push(`错误：${JSON.stringify(res)}`)
@@ -204,7 +204,7 @@ export default class GroupAdmin {
         }
       } else {
         msg.push("成功清理如下人员\n" + i.ul.map((item, index) =>
-      `${index + 1}、${item}`
+          `${index + 1}、${item}`
         ).join("\n"))
       }
     }
@@ -225,11 +225,11 @@ export default class GroupAdmin {
     let msg = list.slice(0, num)
     msg = msg.map((item, index) => {
       return [
-      `第${index + 1}名：\n`,
-      segment.image(`https://q1.qlogo.cn/g?b=qq&s=100&nk=${item.user_id}`),
-      `\nQQ：${item.user_id}\n`,
-      `昵称：${item.card || item.nickname}\n`,
-      `最后发言时间：${moment(item.last_sent_time * 1000).format("YYYY-MM-DD HH:mm:ss")}`
+        `第${index + 1}名：\n`,
+        segment.image(`https://q1.qlogo.cn/g?b=qq&s=100&nk=${item.user_id}`),
+        `\nQQ：${item.user_id}\n`,
+        `昵称：${item.card || item.nickname}\n`,
+        `最后发言时间：${moment(item.last_sent_time * 1000).format("YYYY-MM-DD HH:mm:ss")}`
       ]
     })
     msg.unshift(`不活跃排行榜top1 - top${num}`)
@@ -280,7 +280,7 @@ export default class GroupAdmin {
       fnc: () => {
         bot.pickGroup(group).muteAll(type)
       },
-      job: schedule.scheduleJob(cron, async() => {
+      job: schedule.scheduleJob(cron, async () => {
         try {
           if (task.log == true) {
             logger.mark(`开始定时任务：${task.name}`)
@@ -311,7 +311,7 @@ export default class GroupAdmin {
         group,
         type,
         fnc: () => (Bot[botId] ?? Bot).pickGroup(group).muteAll(type),
-        job: schedule.scheduleJob(cron, async() => {
+        job: schedule.scheduleJob(cron, async () => {
           try {
             if (task.log == true) {
               logger.mark(`开始定时任务：${task.name}`)
@@ -374,13 +374,13 @@ export default class GroupAdmin {
       }
     }
     const result = []
-    for (const [ group, item ] of taskGroups) {
+    for (const [group, item] of taskGroups) {
       const imageSegment = segment.image(`https://p.qlogo.cn/gh/${group}/${group}/100`)
       result.push([
         imageSegment,
-          `\n群号：${group}`,
-          item.cron ? `\n禁言时间："${item.cron}"` : "",
-          item.nocron ? `\n解禁时间："${item.nocron}"` : ""
+        `\n群号：${group}`,
+        item.cron ? `\n禁言时间："${item.cron}"` : "",
+        item.nocron ? `\n解禁时间："${item.nocron}"` : ""
       ])
     }
 
@@ -403,7 +403,7 @@ export default class GroupAdmin {
     let _unit = Time_unit[unit.toUpperCase()] ?? (/^\d+$/.test(unit) ? unit : 60)
     const group = this.Bot.pickGroup(groupId, true)
 
-    const muteSingleMember = async(id, isMore = false) => {
+    const muteSingleMember = async (id, isMore = false) => {
       if (!(/\d{5,}/.test(id))) throw new ReplyError("❎ 请输入正确的QQ号")
 
       // 判断是否为主人
@@ -446,6 +446,77 @@ export default class GroupAdmin {
   }
 
   /**
+   * 查找用户存在于哪些群中
+   * @param {number|string} userId - 用户 QQ 号
+   * @param {number|string} [excludeGroupId] - 排除的群号（通常是当前群）
+   * @returns {Promise<Array>} - 包含群信息的数组
+   */
+  async findUserInAllGroups(userId, excludeGroupId = null) {
+    const result = []
+    const groupList = Array.from(this.Bot.gl.values())
+
+    for (const group of groupList) {
+      // 排除指定群
+      if (excludeGroupId && group.group_id == excludeGroupId) continue
+
+      try {
+        const g = this.Bot.pickGroup(group.group_id, true)
+        const member = g.pickMember(Number(userId) || userId)
+        const memberInfo = member?.info || await member?.getInfo?.()
+
+        if (memberInfo) {
+          result.push({
+            group_id: group.group_id,
+            group_name: group.group_name,
+            member_card: memberInfo.card || memberInfo.nickname,
+            member_role: memberInfo.role,
+            is_admin: g.is_admin,
+            is_owner: g.is_owner
+          })
+        }
+      } catch (e) {
+        // 忽略获取失败的群
+      }
+    }
+    return result
+  }
+
+  /**
+   * 从多个群中踢出用户
+   * @param {Array<number|string>} groupIds - 群号数组
+   * @param {number|string} userId - 用户 QQ 号
+   * @param {number|string} executor - 执行者 QQ 号
+   * @param {boolean} block - 是否拉黑
+   * @returns {Promise<Object>} - 包含成功和失败结果的对象
+   */
+  async kickMemberFromMultipleGroups(groupIds, userId, executor, block = false) {
+    const results = {
+      success: [],
+      failed: []
+    }
+
+    for (const groupId of groupIds) {
+      try {
+        await this.kickMember(groupId, userId, executor, block)
+        const group = this.Bot.pickGroup(groupId, true)
+        results.success.push({
+          group_id: groupId,
+          group_name: group.name || groupId
+        })
+      } catch (err) {
+        results.failed.push({
+          group_id: groupId,
+          error: err.message || String(err)
+        })
+      }
+      // 添加少量延迟避免风控
+      await common.sleep(500)
+    }
+
+    return results
+  }
+
+  /**
    * @async
    * @function kickMember
    * @description 踢出群成员
@@ -461,7 +532,7 @@ export default class GroupAdmin {
 
     if (!groupId || !(/^\d+$/.test(groupId))) throw new ReplyError("❎ 请输入正确的群号")
 
-    const kickSingleMember = async(id, isMore = false) => {
+    const kickSingleMember = async (id, isMore = false) => {
       if (!id || !(/^\d+$/.test(id))) throw new ReplyError("❎ 请输入正确的QQ号")
 
       // 判断是否为主人

@@ -93,6 +93,10 @@ export class GroupAdmin extends plugin {
         {
           reg: Autisticreg, // 我要自闭
           fnc: "Autistic"
+        },
+        {
+          reg: "^#查看共同群(\\d+)?$",
+          fnc: "viewCommonGroups"
         }
       ]
     })
@@ -144,20 +148,225 @@ export class GroupAdmin extends plugin {
     if (!common.checkPermission(e, "admin", "admin")) return true
     let qq = e.message.filter(item => item.type == "at").map(item => item.qq)
     if (qq.length < 2) qq = qq[0] || e.msg.replace(/#|踢黑?/g, "").trim()
+    const isBlack = /黑/.test(e.msg)
+    const isMaster = Config.masterQQ?.includes(e.user_id)
+
+    // 检查 QQ 号是否有效
+    if (!qq || !(/^\d{5,}$/.test(qq))) {
+      return e.reply("❎ 请输入正确的QQ号或@要踢的人")
+    }
+
     try {
-      const res = await new Ga(e).kickMember(e.group_id, qq, e.user_id, /黑/.test(e.msg))
-      e.reply(res)
-      if (/黑/.test(e.msg)) {
-        const _qq = []
-        if (Array.isArray(qq)) {
-          _qq.push(...qq)
-        } else {
-          _qq.push(qq)
+      // 检查是否为主人或白名单用户
+      const isWhiteUser = Config.groupAdmin.whiteQQ?.includes(Number(e.user_id) || String(e.user_id))
+      const canMultiKick = isMaster || isWhiteUser
+
+      // 非主人/白名单：直接踢本群，和以前逻辑一致
+      if (!canMultiKick) {
+        const res = await new Ga(e).kickMember(e.group_id, qq, e.user_id, isBlack)
+        e.reply(res)
+        if (isBlack) {
+          new GroupWhiteListCtrl().addList(e, qq, "add", "blackQQ")
         }
-        for await (let id of _qq) {
-          new GroupWhiteListCtrl().addList(e, id, "add", "blackQQ")
+        return
+      }
+
+      // 主人/白名单：查找用户在其他群的信息（排除当前群）
+      const otherGroups = await new Ga(e).findUserInAllGroups(qq, e.group_id)
+
+      // 如果用户存在于其他群中，显示多群选项
+      if (otherGroups.length > 0) {
+        // 构建群列表信息
+        const groupListMsg = otherGroups.map((g, idx) => {
+          const canKick = g.is_admin || g.is_owner
+          return `${idx + 1}. ${g.group_name} (${g.group_id}) - ${g.member_card}${canKick ? "" : " [无权限]"}`
+        }).join("\n")
+
+        // 保存上下文信息
+        e._kickData = {
+          qq,
+          isBlack,
+          otherGroups,
+          currentGroupId: e.group_id,
+          canMultiKick
+        }
+        this.setContext("_kickMemberContext")
+
+        const replyMsg = [
+          `🔍 用户 ${qq} 还存在于以下群聊中：\n`,
+          groupListMsg,
+          "\n\n━━━━━━━━━━━━━━━━",
+          "\n📌 回复选项：",
+          "\n• 序号如「1」或「123」选择群",
+          "\n• 「全部」从所有群踢出",
+          "\n• 「仅本群」只踢本群",
+          "\n• 「取消」取消操作"
+        ]
+
+        e.reply(replyMsg)
+        return
+      }
+
+      // 用户只在当前群，直接执行踢出
+      const res = await new Ga(e).kickMember(e.group_id, qq, e.user_id, isBlack)
+      e.reply(res)
+      if (isBlack) {
+        new GroupWhiteListCtrl().addList(e, qq, "add", "blackQQ")
+      }
+    } catch (err) {
+      common.handleException(e, err)
+    }
+  }
+
+  async _kickMemberContext(_e) {
+    const e = this.e
+    const { qq, isBlack, otherGroups, currentGroupId, canMultiKick } = _e._kickData
+    const msg = e.msg.trim()
+
+    // 取消操作
+    if (/^(取消|#?取消)$/i.test(msg)) {
+      this.finish("_kickMemberContext")
+      return e.reply("❎ 已取消操作")
+    }
+
+    let selectedGroups = []
+    let kickCurrentGroup = false
+
+    // 仅本群
+    if (/^(仅?本群)$/i.test(msg)) {
+      kickCurrentGroup = true
+    }
+    // 全部
+    else if (/^(全部|all)$/i.test(msg)) {
+      kickCurrentGroup = true
+      selectedGroups = otherGroups.filter(g => g.is_admin || g.is_owner)
+
+      // 多群踢黑只允许主人或白名单
+      if (isBlack && selectedGroups.length > 0 && !canMultiKick) {
+        this.finish("_kickMemberContext")
+        return e.reply("❎ 多群踢黑仅主人或白名单可操作，已取消")
+      }
+    }
+    // 解析数字选择 (支持 1 2 3 或 123 或 1,2,3)
+    else if (/^[\d\s,，]+$/.test(msg)) {
+      // 将 123 拆分为 [1, 2, 3]，也支持空格和逗号分隔
+      const nums = msg.replace(/[,，\s]+/g, "").split("").map(Number).filter(n => !isNaN(n) && n > 0)
+      const uniqueNums = [...new Set(nums)]
+
+      for (const num of uniqueNums) {
+        if (num <= otherGroups.length) {
+          const g = otherGroups[num - 1]
+          if (g.is_admin || g.is_owner) {
+            selectedGroups.push(g)
+          }
         }
       }
+
+      if (selectedGroups.length === 0 && uniqueNums.length > 0) {
+        return e.reply("❎ 所选群无踢人权限，请重新选择")
+      }
+
+      // 多群踢黑只允许主人或白名单
+      if (isBlack && selectedGroups.length > 0 && !canMultiKick) {
+        this.finish("_kickMemberContext")
+        return e.reply("❎ 多群踢黑仅主人或白名单可操作，已取消")
+      }
+
+      kickCurrentGroup = true // 默认也踢本群
+    } else {
+      return e.reply("❎ 无效输入，请输入序号、「全部」、「仅本群」或「取消」")
+    }
+
+    this.finish("_kickMemberContext")
+
+    try {
+      const results = []
+
+      // 踢出当前群
+      if (kickCurrentGroup) {
+        try {
+          const res = await new Ga(e).kickMember(currentGroupId, qq, e.user_id, isBlack)
+          results.push(`✅ ${res}`)
+          if (isBlack) {
+            new GroupWhiteListCtrl().addList(e, qq, "add", "blackQQ")
+          }
+        } catch (err) {
+          results.push(`❎ 本群踢出失败: ${err.message || err}`)
+        }
+      }
+
+      // 踢出其他群
+      if (selectedGroups.length > 0) {
+        const multiRes = await new Ga(e).kickMemberFromMultipleGroups(
+          selectedGroups.map(g => g.group_id),
+          qq,
+          e.user_id,
+          isBlack
+        )
+
+        if (multiRes.success.length > 0) {
+          results.push(`✅ 已从以下群踢出：\n${multiRes.success.map(g => `  • ${g.group_name} (${g.group_id})`).join("\n")}`)
+        }
+        if (multiRes.failed.length > 0) {
+          results.push(`❎ 以下群踢出失败：\n${multiRes.failed.map(g => `  • ${g.group_id}: ${g.error}`).join("\n")}`)
+        }
+      }
+
+      e.reply(results.join("\n\n"))
+    } catch (err) {
+      common.handleException(e, err)
+    }
+  }
+
+  /**
+   * 查看用户存在于哪些共同群
+   */
+  async viewCommonGroups(e) {
+    if (!common.checkPermission(e, "admin", "admin")) return true
+
+    let qq = e.message.filter(item => item.type == "at").map(item => item.qq)
+    if (qq.length < 2) qq = qq[0] || e.msg.replace(/#|查看共同群/g, "").trim()
+
+    if (!qq || !(/^\d{5,}$/.test(qq))) {
+      return e.reply("❎ 请输入正确的QQ号或@要查看的人")
+    }
+
+    try {
+      // 查找用户在所有群的信息（包括当前群）
+      const allGroups = await new Ga(e).findUserInAllGroups(qq)
+
+      // 检查当前群
+      const currentGroup = this.Bot.pickGroup(e.group_id, true)
+      const currentMember = currentGroup.pickMember(Number(qq) || qq)
+      const currentMemberInfo = currentMember?.info || await currentMember?.getInfo?.()
+
+      let groups = []
+      if (currentMemberInfo) {
+        groups.push({
+          group_id: e.group_id,
+          group_name: currentGroup.name || e.group_id,
+          member_card: currentMemberInfo.card || currentMemberInfo.nickname,
+          is_current: true
+        })
+      }
+
+      // 添加其他群
+      groups = groups.concat(allGroups.map(g => ({ ...g, is_current: false })))
+
+      if (groups.length === 0) {
+        return e.reply(`❎ 用户 ${qq} 不在任何共同群中`)
+      }
+
+      const groupListMsg = groups.map((g, idx) => {
+        const current = g.is_current ? " [当前群]" : ""
+        return `${idx + 1}. ${g.group_name} (${g.group_id}) - ${g.member_card}${current}`
+      }).join("\n")
+
+      e.reply([
+        `📋 用户 ${qq} 所在的共同群列表：\n`,
+        `共 ${groups.length} 个群\n\n`,
+        groupListMsg
+      ])
     } catch (err) {
       common.handleException(e, err)
     }
@@ -166,7 +375,7 @@ export class GroupAdmin extends plugin {
   async SetAdmin(e) {
     if (!common.checkPermission(e, "master", "owner")) return
     let qq = e.message.filter(item => item.type == "at").map(item => item.qq)
-    if (qq.length < 1) qq = [ e.msg.replace(/#|(设置|取消)管理/g, "").trim() ]
+    if (qq.length < 1) qq = [e.msg.replace(/#|(设置|取消)管理/g, "").trim()]
     if (!qq || !(/\d{5,}/.test(qq))) return e.reply("❎ 请输入正确的QQ号")
     try {
       let add = /设置管理/.test(e.msg)
@@ -244,7 +453,7 @@ export class GroupAdmin extends plugin {
         e._regRet = regRet
         e._list = list
         this.setContext("startNoactive")
-        e.reply([ `⚠ 本次共需清理「${list.length}」人\n`, "请发送：\"#确认清理\" 开始清理" ])
+        e.reply([`⚠ 本次共需清理「${list.length}」人\n`, "请发送：\"#确认清理\" 开始清理"])
       }
       const page = translateChinaNum(regRet[5] || 1)
       const msg = await new Ga(e).getNoactiveInfo(e.group_id, regRet[2], regRet[3], page)
@@ -277,7 +486,7 @@ export class GroupAdmin extends plugin {
       if (/^#?清理/.test(e.msg)) {
         this.setContext("startNeverspeak")
         e._list = list
-        e.reply([ `⚠ 本次共需清理「${list.length}」人，防止误触发\n`, "请发送：\"#确认清理\" 开始清理" ])
+        e.reply([`⚠ 本次共需清理「${list.length}」人，防止误触发\n`, "请发送：\"#确认清理\" 开始清理"])
       } else {
         const page = translateChinaNum(e.msg.match(new RegExp(Numreg))?.[0] || 1)
         const res = await new Ga(e).getNeverSpeakInfo(e.group_id, page, list)
