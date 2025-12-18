@@ -310,6 +310,25 @@ export default class {
   }
 
   /**
+   * 获取与某用户的共同群
+   * @param {string|number} userId QQ号
+   * @returns {Promise<object|false>} 共同群信息或false
+   */
+  async getCommonGroups(userId) {
+    let url = `https://ti.qq.com/friends/recall?uin=${userId}`
+    try {
+      let res = await fetch(url, { headers: { Cookie: this.Bot.cookies["ti.qq.com"] } })
+        .then(res => res.text()).catch(err => logger.error(err))
+      let data = res.match(/window\.__INITIAL_STATE__=(.*?)<\/script>/)
+      if (!data) return false
+      return JSON.parse(data[1])
+    } catch (err) {
+      logger.error(err)
+      return false
+    }
+  }
+
+  /**
    * 查看本群龙王
    * @param group_id
    */

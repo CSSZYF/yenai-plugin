@@ -1,7 +1,7 @@
 import _ from "lodash"
 import { Config } from "../../components/index.js"
 import { Time_unit } from "../../constants/other.js"
-import { GroupAdmin as Ga, GroupBannedWords, common } from "../../model/index.js"
+import { GroupAdmin as Ga, GroupBannedWords, common, QQApi } from "../../model/index.js"
 import { cronValidate, translateChinaNum } from "../../tools/index.js"
 import { GroupWhiteListCtrl } from "./groupWhiteListCtrl.js"
 
@@ -353,7 +353,22 @@ export class GroupAdmin extends plugin {
     }
 
     try {
-      // 查找用户在所有群的信息（包括当前群）
+      // 优先使用 QQ API 获取共同群信息
+      const qqApiResult = await new QQApi(e).getCommonGroups(qq)
+
+      if (qqApiResult && qqApiResult.commonGrpsNumber > 0) {
+        // QQ API 获取成功，显示基本信息
+        e.reply([
+          `📋 用户 ${qq} 的共同群信息：\n`,
+          `昵称：${qqApiResult.nickname || "未知"}\n`,
+          `共同群聊：${qqApiResult.commonGrpsNumber} 个\n`,
+          `来源：${qqApiResult.source || "未知"}\n`,
+          qqApiResult.gc ? `共同群：${qqApiResult.gc}` : ""
+        ].filter(Boolean))
+        return
+      }
+
+      // QQ API 失败或无数据，使用缓存方式查询
       const allGroups = await new Ga(e).findUserInAllGroups(qq)
 
       // 检查当前群（使用缓存）
