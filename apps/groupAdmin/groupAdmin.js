@@ -339,7 +339,11 @@ export class GroupAdmin extends plugin {
    * 查看用户存在于哪些共同群
    */
   async viewCommonGroups(e) {
-    if (!common.checkPermission(e, "admin", "admin")) return true
+    // 查看共同群不需要 Bot 有管理权限，只需要用户是管理员即可
+    const isMaster = Config.masterQQ?.includes(e.user_id)
+    if (!isMaster && !e.member?.is_admin && !e.member?.is_owner) {
+      return e.reply("❎ 仅管理员可使用此功能")
+    }
 
     let qq = e.message.filter(item => item.type == "at").map(item => item.qq)
     if (qq.length < 2) qq = qq[0] || e.msg.replace(/#|查看共同群/g, "").trim()
@@ -352,16 +356,17 @@ export class GroupAdmin extends plugin {
       // 查找用户在所有群的信息（包括当前群）
       const allGroups = await new Ga(e).findUserInAllGroups(qq)
 
-      // 检查当前群
+      // 检查当前群（使用缓存）
       const currentGroup = this.Bot.pickGroup(e.group_id, true)
-      const currentMember = currentGroup.pickMember(Number(qq) || qq)
-      const currentMemberInfo = currentMember?.info || await currentMember?.getInfo?.()
+      const currentGroupInfo = this.Bot.gl.get(Number(e.group_id)) || {}
+      const memberMap = await currentGroup.getMemberMap?.() || currentGroup.member_map || new Map()
+      const currentMemberInfo = memberMap.get(Number(qq) || qq)
 
       let groups = []
       if (currentMemberInfo) {
         groups.push({
           group_id: e.group_id,
-          group_name: currentGroup.name || e.group_id,
+          group_name: currentGroupInfo.group_name || currentGroup.name || e.group_id,
           member_card: currentMemberInfo.card || currentMemberInfo.nickname,
           is_current: true
         })
